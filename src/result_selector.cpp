@@ -703,15 +703,6 @@ void ResultSelector::onComboZChanged(int /*index*/)
 }
 
 // Reload
-void ResultSelector::onAutoReload(const QString &path)
-{
-    QFileInfo fi(path);
-    if (fi.exists() && fi.isReadable() && fi.size() > 0)
-        onReloadClicked();
-    else
-        qWarning() << "Unable to auto-reload file: " << path;
-}
-
 void ResultSelector::updateReloadWatchList()
 {
     if (ui->checkBoxAutoReload->isChecked())
@@ -743,7 +734,16 @@ void ResultSelector::onCheckAutoReload(int state)
     }
 }
 
-void ResultSelector::onReloadClicked()
+void ResultSelector::onAutoReload(const QString &path)
+{
+    QFileInfo fi(path);
+    if (fi.exists() && fi.isReadable() && fi.size() > 0)
+        onReloadClicked2(true, false);
+    else
+        qWarning() << "Unable to auto-reload file: " << path;
+}
+
+void ResultSelector::onReloadClicked2(bool /*checked*/, bool fromUser)
 {
     // Check original
     if ( mOrigFilename.isEmpty() ) {
@@ -751,16 +751,22 @@ void ResultSelector::onReloadClicked()
         return;
     }
     if ( !QFile::exists(mOrigFilename) ) {
-        QMessageBox::warning(this, "Reload benchmark results",
-                             "File to reload does no exist:" + mOrigFilename);
+        if (fromUser)
+            QMessageBox::warning(this, "Reload benchmark results",
+                                 "File to reload does no exist:" + mOrigFilename);
+        else
+            qWarning() << "File to reload does no exist:" + mOrigFilename;
         return;
     }
     // Load original
     QString errorMsg;
     BenchResults newResults = ResultParser::parseJsonFile(mOrigFilename, errorMsg);
     if (newResults.benchmarks.size() <= 0) {
-        QMessageBox::warning(this, "Reload benchmark results",
-                             "Error parsing file: " + mOrigFilename + "\n" + errorMsg);
+        if (fromUser)
+            QMessageBox::warning(this, "Reload benchmark results",
+                                 "Error parsing file: " + mOrigFilename + "\n" + errorMsg);
+        else
+            qWarning() << "Error parsing file: " << mOrigFilename << "\n" << errorMsg;
         return;
     }
     
@@ -770,8 +776,11 @@ void ResultSelector::onReloadClicked()
         QString errorMsg;
         BenchResults addResults = ResultParser::parseJsonFile(addFile.filename, errorMsg);
         if (addResults.benchmarks.size() <= 0) {
-            QMessageBox::warning(this, "Reload benchmark results",
-                                 "Error parsing file: " + addFile.filename + "\n" + errorMsg);
+            if (fromUser)
+                QMessageBox::warning(this, "Reload benchmark results",
+                                     "Error parsing file: " + addFile.filename + "\n" + errorMsg);
+            else
+                qWarning() << "Error parsing file: " << addFile.filename << "\n" << errorMsg;
             return;
         }
         // Append / Overwrite

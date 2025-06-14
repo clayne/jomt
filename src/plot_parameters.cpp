@@ -17,7 +17,7 @@
 
 #include <algorithm>
 
-const char* config_folder = "jomtSettings/";
+const char* config_folder = "./jomtSettings/";
 
 
 double getYPlotValue(const BenchData &bchData, PlotValueType yType)

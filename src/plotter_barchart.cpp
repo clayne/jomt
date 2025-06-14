@@ -1370,19 +1370,22 @@ void PlotterBarChart::onAutoReload(const QString &path)
 {
     QFileInfo fi(path);
     if (fi.exists() && fi.isReadable() && fi.size() > 0)
-        onReloadClicked();
+        onReloadClicked2(true, false);
     else
         qWarning() << "Unable to auto-reload file: " << path;
 }
 
-void PlotterBarChart::onReloadClicked()
+void PlotterBarChart::onReloadClicked2(bool /*checked*/, bool fromUser)
 {
     // Load new results
     QString errorMsg;
     BenchResults newBchResults = ResultParser::parseJsonFile( mOrigFilename, errorMsg );
     
     if ( newBchResults.benchmarks.isEmpty() ) {
-        QMessageBox::critical(this, "Chart reload", "Error parsing original file: " + mOrigFilename + " -> " + errorMsg);
+        if (fromUser)
+            QMessageBox::critical(this, "Chart reload", "Error parsing original file: " + mOrigFilename + " -> " + errorMsg);
+        else
+            qWarning() << "Error parsing original file: " << mOrigFilename << " -> " << errorMsg;
         return;
     }
     for (const auto& addFile : std::as_const(mAddFilenames))
@@ -1390,7 +1393,10 @@ void PlotterBarChart::onReloadClicked()
         errorMsg.clear();
         BenchResults newAddResults = ResultParser::parseJsonFile(addFile.filename, errorMsg);
         if ( newAddResults.benchmarks.isEmpty() ) {
-            QMessageBox::critical(this, "Chart reload", "Error parsing additional file: " + addFile.filename + " -> " + errorMsg);
+            if (fromUser)
+                QMessageBox::critical(this, "Chart reload", "Error parsing additional file: " + addFile.filename + " -> " + errorMsg);
+            else
+                qWarning() << "Error parsing additional file: " << addFile.filename << " -> " << errorMsg;
             return;
         }
         
@@ -1491,7 +1497,10 @@ void PlotterBarChart::onReloadClicked()
     }
     else
     {
-        QMessageBox::critical(this, "Chart reload", errorMsg);
+        if (fromUser)
+            QMessageBox::critical(this, "Chart reload", errorMsg);
+        else
+            qWarning() << errorMsg;
         return;
     }
     

@@ -81,7 +81,8 @@ public slots:
     
     void onCheckAutoReload(int state);
     void onAutoReload(const QString &path);
-    void onReloadClicked();
+    void onReloadClicked(bool checked) { onReloadClicked2(checked, true); };
+    void onReloadClicked2(bool checked, bool fromUser);
     void onSnapshotClicked();
     
 private:

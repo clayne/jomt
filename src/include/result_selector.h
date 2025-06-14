@@ -53,10 +53,11 @@ public slots:
     void onComboXChanged(int index);
     void onComboZChanged(int index);
     
-    void onAutoReload(const QString &path);
     void updateReloadWatchList();
     void onCheckAutoReload(int state);
-    void onReloadClicked();
+    void onAutoReload(const QString &path);
+    void onReloadClicked(bool checked) { onReloadClicked2(checked, true); };
+    void onReloadClicked2(bool checked, bool fromUser);
     
     void onNewClicked();
     void onAppendClicked();

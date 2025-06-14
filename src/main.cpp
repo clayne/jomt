@@ -26,7 +26,7 @@
 #include <QDebug>
 
 #define APP_NAME    "JOMT"
-#define APP_VER     "1.1b"
+#define APP_VER     "1.2b"
 #define APP_ICON    ":/jomt_icon.png"
 
 // Debug
@@ -41,7 +41,8 @@ int main(int argc, char *argv[])
     QCoreApplication::setApplicationName(APP_NAME);
     QCoreApplication::setApplicationVersion(APP_VER);
     QApplication::setWindowIcon( QIcon(APP_ICON) );
-    
+
+    QDir::setCurrent(app.applicationDirPath());
     QDir configDir(config_folder);
     if (!configDir.exists())
         configDir.mkpath(".");

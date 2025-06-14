@@ -1225,27 +1225,33 @@ void PlotterLineChart::onAutoReload(const QString &path)
 {
     QFileInfo fi(path);
     if (fi.exists() && fi.isReadable() && fi.size() > 0)
-        onReloadClicked();
+        onReloadClicked2(true, false);
     else
         qWarning() << "Unable to auto-reload file: " << path;
 }
 
-void PlotterLineChart::onReloadClicked()
+void PlotterLineChart::onReloadClicked2(bool /*checked*/, bool fromUser)
 {
     // Load new results
     QString errorMsg;
     BenchResults newBchResults = ResultParser::parseJsonFile( mOrigFilename, errorMsg );
     
-    if ( newBchResults.benchmarks.isEmpty() ) {
-        QMessageBox::critical(this, "Chart reload", "Error parsing original file: " + mOrigFilename + " -> " + errorMsg);
+    if (newBchResults.benchmarks.isEmpty()) {
+        if (fromUser)
+            QMessageBox::critical(this, "Chart reload", "Error parsing original file: " + mOrigFilename + " -> " + errorMsg);
+        else
+            qWarning() << "Error parsing original file: " << mOrigFilename << " -> " << errorMsg;
         return;
     }
     for (const auto& addFile : std::as_const(mAddFilenames))
     {
         errorMsg.clear();
         BenchResults newAddResults = ResultParser::parseJsonFile(addFile.filename, errorMsg);
-        if ( newAddResults.benchmarks.isEmpty() ) {
-            QMessageBox::critical(this, "Chart reload", "Error parsing additional file: " + addFile.filename + " -> " + errorMsg);
+        if (newAddResults.benchmarks.isEmpty()) {
+            if (fromUser)
+                QMessageBox::critical(this, "Chart reload", "Error parsing additional file: " + addFile.filename + " -> " + errorMsg);
+            else
+                qWarning() << "Error parsing additional file: " << addFile.filename << " -> " << errorMsg;
             return;
         }
         
@@ -1345,7 +1351,10 @@ void PlotterLineChart::onReloadClicked()
     }
     else
     {
-        QMessageBox::critical(this, "Chart reload", errorMsg);
+        if (fromUser)
+            QMessageBox::critical(this, "Chart reload", errorMsg);
+        else
+            qWarning() << errorMsg;
         return;
     }
     

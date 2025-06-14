@@ -1161,19 +1161,22 @@ void Plotter3DBars::onAutoReload(const QString &path)
 {
     QFileInfo fi(path);
     if (fi.exists() && fi.isReadable() && fi.size() > 0)
-        onReloadClicked();
+        onReloadClicked2(true, false);
     else
         qWarning() << "Unable to auto-reload file: " << path;
 }
 
-void Plotter3DBars::onReloadClicked()
+void Plotter3DBars::onReloadClicked2(bool /*checked*/, bool fromUser)
 {
     // Load new results
     QString errorMsg;
     BenchResults newBchResults = ResultParser::parseJsonFile( mOrigFilename, errorMsg );
     
     if ( newBchResults.benchmarks.isEmpty() ) {
-        QMessageBox::critical(this, "Chart reload", "Error parsing original file: " + mOrigFilename + " -> " + errorMsg);
+        if (fromUser)
+            QMessageBox::critical(this, "Chart reload", "Error parsing original file: " + mOrigFilename + " -> " + errorMsg);
+        else
+            qWarning() << "Error parsing original file: " << mOrigFilename << " -> " << errorMsg;
         return;
     }
     
@@ -1182,7 +1185,10 @@ void Plotter3DBars::onReloadClicked()
         errorMsg.clear();
         BenchResults newAddResults = ResultParser::parseJsonFile(addFile.filename, errorMsg);
         if ( newAddResults.benchmarks.isEmpty() ) {
-            QMessageBox::critical(this, "Chart reload", "Error parsing additional file: " + addFile.filename + " -> " + errorMsg);
+            if (fromUser)
+                QMessageBox::critical(this, "Chart reload", "Error parsing additional file: " + addFile.filename + " -> " + errorMsg);
+            else
+                qWarning() << "Error parsing additional file: " << addFile.filename << " -> " << errorMsg;
             return;
         }
         
@@ -1377,7 +1383,10 @@ void Plotter3DBars::onReloadClicked()
         }
         else
         {
-            QMessageBox::critical(this, "Chart reload", errorMsg);
+            if (fromUser)
+                QMessageBox::critical(this, "Chart reload", errorMsg);
+            else
+                qWarning() << errorMsg;
             return;
         }
     }
