@@ -18,7 +18,7 @@ Built upon Qt6 Charts and DataVisualization modules.
 - Support old naming format and aggregate data (min, median, mean, stddev/cv)
 - Multiple 2D and 3D chart types
 - Benchmarks and axes selection
-- Plotting options (theme, ranges, logarithm, labels, units, ...)
+- Plotting options (theme, ranges, logarithm, labels, units, baseline, ...)
 - Auto-reload and preferences saving
 
 ### Command line

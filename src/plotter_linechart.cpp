@@ -19,6 +19,7 @@
 #include "benchmark_results.h"
 #include "result_parser.h"
 
+#include <QHash>
 #include <QFileInfo>
 #include <QDateTime>
 #include <QFileDialog>
@@ -110,6 +111,12 @@ void PlotterLineChart::connectUI()
         connect(ui->comboBoxTimeUnit, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &PlotterLineChart::onComboTimeUnitChanged);
     }
     
+    ui->comboBoxBaseline->addItem("", BaselineType::NONE);
+    ui->comboBoxBaseline->addItem("Divide by X", BaselineType::DIV_BY_X);
+    ui->comboBoxBaseline->addItem("Lowest", BaselineType::LOWEST_Y);
+    ui->comboBoxBaseline->addItem("Highest", BaselineType::HIGHEST_Y);
+    connect(ui->comboBoxBaseline, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &PlotterLineChart::onComboBaselineChanged);
+    
     // Axes
     ui->comboBoxAxis->addItem("X-Axis");
     ui->comboBoxAxis->addItem("Y-Axis");
@@ -137,6 +144,7 @@ void PlotterLineChart::connectUI()
 
 void PlotterLineChart::setupChart(const BenchResults &bchResults, const QVector<int> &bchIdxs, const PlotParams &plotParams, bool init)
 {
+    QVector<QList<QPointF>> seriesPoints;
     std::unique_ptr<QChart> scopedChart;
     QChart* chart = nullptr;
     if (init) {
@@ -154,6 +162,7 @@ void PlotterLineChart::setupChart(const BenchResults &bchResults, const QVector<
         if ( !yAxes.empty() )
             chart->removeAxis( yAxes.constFirst() );
         mSeriesMapping.clear();
+        mSeriesPoints.clear();
     }
     Q_ASSERT(chart);
     
@@ -163,6 +172,7 @@ void PlotterLineChart::setupChart(const BenchResults &bchResults, const QVector<
         if (     bchResults.meta.time_unit == "ns") mCurrentTimeFactor = 1000.;
         else if (bchResults.meta.time_unit == "ms") mCurrentTimeFactor = 0.001;
     }
+    mLastScaleFactor = mCurrentTimeFactor;
     
     
     // 2D Lines
@@ -182,6 +192,7 @@ void PlotterLineChart::setupChart(const BenchResults &bchResults, const QVector<
         }
         
         // Chart type
+        QList<QPointF> points; // in us
         std::unique_ptr<QLineSeries> series;
         if (plotParams.type == ChartLineType)   series.reset(new QLineSeries());
         else                                    series.reset(new QSplineSeries());
@@ -198,12 +209,15 @@ void PlotterLineChart::setupChart(const BenchResults &bchResults, const QVector<
             double xVal = BenchResults::getParamValue(xName, custDataName, custDataAxis, xFallback);
             
             // Add point
-            series->append(xVal, getYPlotValue(bchResults.benchmarks[idx], plotParams.yType) * mCurrentTimeFactor);
+            double yVal = getYPlotValue(bchResults.benchmarks[idx], plotParams.yType);
+            series->append(xVal, yVal * mCurrentTimeFactor);
+            points.emplaceBack(xVal, yVal);
         }
         // Add series
         series->setName( subsetName.toHtmlEscaped() );
         mSeriesMapping.push_back({subsetName, subsetName}); // color set later
         chart->addSeries(series.release());
+        seriesPoints.append(points);
     }
     
     //
@@ -238,6 +252,9 @@ void PlotterLineChart::setupChart(const BenchResults &bchResults, const QVector<
         mChartView = new QChartView(scopedChart.release(), this);
         mChartView->setRenderHint(QPainter::Antialiasing);
     }
+    
+    // Update originals copy
+    mSeriesPoints = seriesPoints;
 }
 
 void PlotterLineChart::setupOptions(bool init)
@@ -270,6 +287,17 @@ void PlotterLineChart::setupOptions(bool init)
     if      (mCurrentTimeFactor > 1.) ui->comboBoxTimeUnit->setCurrentIndex(0); // ns
     else if (mCurrentTimeFactor < 1.) ui->comboBoxTimeUnit->setCurrentIndex(2); // ms
     else                              ui->comboBoxTimeUnit->setCurrentIndex(1); // us
+    
+    // Baseline
+    ui->comboBoxBaseline->setCurrentIndex(0);
+    while (ui->comboBoxBaseline->count() > BaselineBasicTypes) // removed old series
+        ui->comboBoxBaseline->removeItem(ui->comboBoxBaseline->count() - 1);
+
+    for (int idx = 0 ; idx < mSeriesMapping.size(); ++idx)
+    {
+        auto& config = mSeriesMapping[idx];
+        ui->comboBoxBaseline->addItem(config.oldName, idx);
+    }
     
     // Axes
     const auto& hAxes = chart->axes(Qt::Horizontal);
@@ -402,6 +430,19 @@ void PlotterLineChart::loadConfig(bool init)
                 ui->comboBoxTimeUnit->setCurrentText( json["timeUnit"].toString() );
         }
         
+        // Baseline
+        bool appliedBaseline = true;
+        if (json.contains("baseline") && json["baseline"].isDouble())
+        {
+            int type = json["baseline"].toInt(BaselineType::NONE);
+            if (type < 0)
+                ui->comboBoxBaseline->setCurrentIndex(qAbs(type) -1);
+            else if (type < ui->comboBoxBaseline->count() - BaselineBasicTypes)
+                ui->comboBoxBaseline->setCurrentIndex(type + BaselineBasicTypes);
+            else
+                appliedBaseline = false;
+    }
+        
         // Actions
         if (json.contains("autoReload") && json["autoReload"].isBool())
             ui->checkBoxAutoReload->setChecked( json["autoReload"].toBool() );
@@ -451,12 +492,14 @@ void PlotterLineChart::loadConfig(bool init)
             }
             if (!init)
             {
-                if (json.contains(prefix + ".titleText") && json[prefix + ".titleText"].isString()) {
-                    axis.titleText = json[prefix + ".titleText"].toString();
-                    ui->lineEditTitle->setText( axis.titleText );
-                    ui->lineEditTitle->setCursorPosition(0);
+                if (idx == 0 || appliedBaseline) {
+                  if (json.contains(prefix + ".titleText") && json[prefix + ".titleText"].isString()) {
+                      axis.titleText = json[prefix + ".titleText"].toString();
+                      ui->lineEditTitle->setText( axis.titleText );
+                      ui->lineEditTitle->setCursorPosition(0);
+                  }
                 }
-                if (idx == 1)
+                if (idx == 1 && appliedBaseline)
                 {
                     if (json.contains(prefix + ".min") && json[prefix + ".min"].isDouble()) {
                         axis.min = json[prefix + ".min"].toDouble();
@@ -507,6 +550,8 @@ void PlotterLineChart::saveConfig()
             json["series"] = series;
         // Time
         json["timeUnit"] = ui->comboBoxTimeUnit->currentText();
+        // Baseline
+        json["baseline"] = ui->comboBoxBaseline->currentData().toInt();
         // Actions
         json["autoReload"] = ui->checkBoxAutoReload->isChecked();
         // Axes
@@ -533,6 +578,217 @@ void PlotterLineChart::saveConfig()
     }
     else
         qWarning() << "Couldn't update: " << QString(config_folder) + config_file;
+}
+
+void PlotterLineChart::updateVAxisTitle()
+{
+    const auto& axes = mChartView->chart()->axes(Qt::Vertical);
+    if ( axes.isEmpty() )
+        return;
+    
+    double timeFactor = ui->comboBoxTimeUnit->currentData().toDouble();
+    int baselineIndex = ui->comboBoxBaseline->currentData().toInt();
+    
+    QString timeUnit;
+    if (ui->comboBoxTimeUnit->count() > 0)
+    {
+        timeUnit = " (us)";
+        if      (timeFactor > 1.) timeUnit = " (ns)";
+        else if (timeFactor < 1.) timeUnit = " (ms)";
+    }
+    
+    QString baselineSuffix;
+    if (baselineIndex == BaselineType::DIV_BY_X) {
+        baselineSuffix = " per element";
+    }
+    else if (baselineIndex == BaselineType::LOWEST_Y) {
+        baselineSuffix = " (relative to lowest)";
+        timeUnit.clear();
+    }
+    else if (baselineIndex == BaselineType::HIGHEST_Y) {
+        baselineSuffix = " (relative to highest)";
+        timeUnit.clear();
+    }
+    else if (baselineIndex >= 0) { // div by series Y
+        baselineSuffix = " (relative to series " + QString::number(baselineIndex + 1) + ")";
+        timeUnit.clear();
+    }
+    
+    // Remove old suffixes
+    QAbstractAxis* axis = axes.first();
+    QString axisTitle = axis->titleText();
+    if (axisTitle.endsWith("(us)") || axisTitle.endsWith("(ns)") || axisTitle.endsWith("(ms)")) {
+        axisTitle.chop(4);
+    }
+    else
+    {
+        qsizetype idx = axisTitle.lastIndexOf("(relative to ", Qt::CaseInsensitive);
+        if (idx >= 0)
+            axisTitle.truncate(idx);
+    }
+    
+    if (axisTitle.endsWith("per element ", Qt::CaseInsensitive))
+        axisTitle.chop(12);
+    
+    if (axisTitle.endsWith(" "))
+        axisTitle.chop(1);
+    
+    // Apply
+    axisTitle += baselineSuffix + timeUnit;
+    if (ui->comboBoxAxis->currentIndex() == 1) {
+        ui->lineEditTitle->setText(axisTitle);
+        mAxesParams[1].titleText = axisTitle;
+    }
+    else {
+        onEditTitleChanged2(axisTitle, 1);
+    }
+}
+
+void PlotterLineChart::updateVAxisRange(double scaleFactor)
+{
+    double updateFactor = scaleFactor / mLastScaleFactor;
+    
+    if (ui->comboBoxAxis->currentIndex() == 1) {
+        ui->doubleSpinBoxMin->setValue(mAxesParams[1].min * updateFactor);
+        ui->doubleSpinBoxMax->setValue(mAxesParams[1].max * updateFactor);
+    }
+    else {
+        onSpinMinChanged2(mAxesParams[1].min * updateFactor, 1);
+        onSpinMaxChanged2(mAxesParams[1].max * updateFactor, 1);
+    }
+    mLastScaleFactor = scaleFactor;
+}
+
+double PlotterLineChart::updateChartPoints()
+{
+    double scaleFactor = EPSILON_DIV;
+    int baselineIndex = ui->comboBoxBaseline->currentData().toInt();
+    double timeFactor = ui->comboBoxTimeUnit->currentData().toDouble();
+    
+    auto chartSeries = mChartView->chart()->series();
+    Q_ASSERT(mSeriesPoints.size() == chartSeries.size());
+    Q_ASSERT(baselineIndex < mSeriesPoints.size());
+    
+    switch (baselineIndex)
+    {
+        case BaselineType::NONE:
+        {
+            for (qsizetype i = 0; i < chartSeries.size(); ++i)
+            {
+                auto& series = chartSeries[i];
+                auto xySeries = (QXYSeries*)series;
+                auto newPoints = mSeriesPoints[i];
+                
+                for (auto& newPoint : newPoints) {
+                    newPoint.setY(newPoint.y() * timeFactor);
+                }
+                xySeries->replace(newPoints);
+            }
+            scaleFactor = timeFactor;
+            break;
+        }
+        case BaselineType::DIV_BY_X:
+        {
+            for (qsizetype i = 0; i < chartSeries.size(); ++i)
+            {
+                auto& series = chartSeries[i];
+                auto xySeries = (QXYSeries*)series;
+                auto newPoints = mSeriesPoints[i];
+                
+                for (auto& newPoint : newPoints) {
+                    double xFactor = newPoint.x() != 0. ? newPoint.x() : EPSILON_DIV;
+                    scaleFactor = qAbs(scaleFactor) < qAbs(xFactor) ? xFactor : scaleFactor;
+                    newPoint.setY((newPoint.y() * timeFactor) / xFactor);
+                }
+                xySeries->replace(newPoints);
+            }
+            scaleFactor = timeFactor / scaleFactor;
+            break;
+        }
+        case BaselineType::LOWEST_Y:
+        {
+            QHash<double, double> rFactors; // x, factor
+            for (qsizetype i = 0; i < chartSeries.size(); ++i)
+            {
+                const auto& points = mSeriesPoints[i];
+                for (const auto& point : points) {
+                    auto it = rFactors.find(point.x());
+                    double yVal = (it != rFactors.end()) ? qMin(it.value(), point.y()) : point.y();
+                    rFactors[point.x()] = yVal != 0. ? yVal : EPSILON_DIV;
+                }
+            }
+            for (qsizetype i = 0; i < chartSeries.size(); ++i)
+            {
+                auto& series = chartSeries[i];
+                auto xySeries = (QXYSeries*)series;
+                auto newPoints = mSeriesPoints[i];
+                
+                for (auto& newPoint : newPoints) {
+                    auto it = rFactors.find(newPoint.x());
+                    double rFactor = (it != rFactors.end()) ? it.value() : 1.;
+                    scaleFactor = qAbs(scaleFactor) < qAbs(rFactor) ? rFactor : scaleFactor;
+                    newPoint.setY(newPoint.y() / rFactor);
+                }
+                xySeries->replace(newPoints);
+            }
+            scaleFactor = 1. / scaleFactor;
+            break;
+        }
+        case BaselineType::HIGHEST_Y:
+        {
+            QHash<double, double> rFactors; // x, factor
+            for (qsizetype i = 0; i < chartSeries.size(); ++i)
+            {
+                const auto& points = mSeriesPoints[i];
+                for (const auto& point : points) {
+                    auto it = rFactors.find(point.x());
+                    double yVal = (it != rFactors.end()) ? qMax(it.value(), point.y()) : point.y();
+                    rFactors[point.x()] = yVal != 0. ? yVal : EPSILON_DIV;
+                }
+            }
+            for (qsizetype i = 0; i < chartSeries.size(); ++i)
+            {
+                auto& series = chartSeries[i];
+                auto xySeries = (QXYSeries*)series;
+                auto newPoints = mSeriesPoints[i];
+                
+                for (auto& newPoint : newPoints) {
+                    auto it = rFactors.find(newPoint.x());
+                    double rFactor = (it != rFactors.end()) ? it.value() : 1.;
+                    scaleFactor = qAbs(scaleFactor) < qAbs(rFactor) ? rFactor : scaleFactor;
+                    newPoint.setY(newPoint.y() / rFactor);
+                }
+                xySeries->replace(newPoints);
+            }
+            scaleFactor = 1. / scaleFactor;
+            break;
+        }
+        default: // divide by series Y
+        {
+            Q_ASSERT(baselineIndex >= 0 && baselineIndex < (int)mSeriesPoints.size());
+            QHash<double, double> rFactors; // x, factor
+            for (const auto& point : mSeriesPoints[baselineIndex]) {
+                rFactors[point.x()] = point.y() != 0. ? point.y() : EPSILON_DIV;
+            }
+            for (qsizetype i = 0; i < chartSeries.size(); ++i)
+            {
+                auto& series = chartSeries[i];
+                auto xySeries = (QXYSeries*)series;
+                auto newPoints = mSeriesPoints[i];
+                
+                for (auto& newPoint : newPoints) {
+                    auto it = rFactors.find(newPoint.x());
+                    double rFactor = (it != rFactors.end()) ? it.value() : 1.;
+                    scaleFactor = qAbs(scaleFactor) < qAbs(rFactor) ? rFactor : scaleFactor;
+                    newPoint.setY(newPoint.y() / rFactor);
+                }
+                xySeries->replace(newPoints);
+            }
+            scaleFactor = 1. / scaleFactor;
+            break;
+        }
+    }
+    return scaleFactor;
 }
 
 //
@@ -613,46 +869,28 @@ void PlotterLineChart::onSeriesEditClicked()
 void PlotterLineChart::onComboTimeUnitChanged(int /*index*/)
 {
     if (mIgnoreEvents) return;
+
+    double timeFactor = ui->comboBoxTimeUnit->currentData().toDouble();
+    double scaleFactor = updateChartPoints();
+
+    updateVAxisTitle();
+    updateVAxisRange(scaleFactor);
+
+    mCurrentTimeFactor = timeFactor;
+}
+
+void PlotterLineChart::onComboBaselineChanged(int /*index*/)
+{
+    if (mIgnoreEvents) return;
     
-    // Update data
-    double unitFactor = ui->comboBoxTimeUnit->currentData().toDouble();
-    double updateFactor = unitFactor / mCurrentTimeFactor;  // can cause precision loss
-    auto chartSeries = mChartView->chart()->series();
-    for (auto& series : chartSeries)
-    {
-        auto xySeries = (QXYSeries*)series;
-        auto points = xySeries->points();
-        for (auto& point : points) {
-            point.setY(point.y() * updateFactor);
-        }
-        xySeries->replace(points);
-    }
+    int baselineIndex = ui->comboBoxBaseline->currentData().toInt();
+    bool useTimeUnit = baselineIndex == BaselineType::NONE || baselineIndex == BaselineType::DIV_BY_X;
+    ui->comboBoxTimeUnit->setEnabled(useTimeUnit);
+
+    double scaleFactor = updateChartPoints();
     
-    // Update axis title
-    QString oldUnitName = "(us)";
-    if      (mCurrentTimeFactor > 1.) oldUnitName = "(ns)";
-    else if (mCurrentTimeFactor < 1.) oldUnitName = "(ms)";
-    
-    const auto& axes = mChartView->chart()->axes(Qt::Vertical);
-    if ( !axes.isEmpty() ) {
-        QAbstractAxis* axis = axes.first();
-        QString axisTitle = axis->titleText();
-        if (axisTitle.endsWith(oldUnitName)) {
-            QString unitName  = ui->comboBoxTimeUnit->currentText();
-            onEditTitleChanged2(axisTitle.replace(axisTitle.size() - 3, 2, unitName), 1);
-        }
-    }
-    // Update range
-    if (ui->comboBoxAxis->currentIndex() == 1) {
-        ui->doubleSpinBoxMin->setValue(mAxesParams[1].min * updateFactor);
-        ui->doubleSpinBoxMax->setValue(mAxesParams[1].max * updateFactor);
-    }
-    else {
-        onSpinMinChanged2(mAxesParams[1].min * updateFactor, 1);
-        onSpinMaxChanged2(mAxesParams[1].max * updateFactor, 1);
-    }
-    
-    mCurrentTimeFactor = unitFactor;
+    updateVAxisTitle();
+    updateVAxisRange(scaleFactor);
 }
 
 //
@@ -1010,6 +1248,7 @@ void PlotterLineChart::onReloadClicked()
             QMessageBox::critical(this, "Chart reload", "Error parsing additional file: " + addFile.filename + " -> " + errorMsg);
             return;
         }
+        
         if (addFile.isAppend)
             newBchResults.appendResults(newAddResults);
         else
@@ -1024,7 +1263,7 @@ void PlotterLineChart::onReloadClicked()
         if (mAllIndexes)
         {
             mBenchIdxs.clear();
-            for (int i=0; i<newBchResults.benchmarks.size(); ++i)
+            for (int i = 0; i < newBchResults.benchmarks.size(); ++i)
                 mBenchIdxs.append(i);
         }
     }
@@ -1056,17 +1295,19 @@ void PlotterLineChart::onReloadClicked()
             }
             ++newSeriesIdx;
         }
-        if (newSeriesIdx != oldChartSeries.size()) {
+        if (newSeriesIdx != oldChartSeries.size())
             errorMsg = "Number of series is different";
-        }
     }
     
     // Direct update if compatible
-    if ( errorMsg.isEmpty() )
+    if (errorMsg.isEmpty())
     {
         bool custDataAxis = true;
         QString custDataName;
-        newSeriesIdx = 0;
+        QVector<QList<QPointF>> seriesPoints;
+        Q_ASSERT(mSeriesPoints.size() == oldChartSeries.size());
+        
+        // newSeriesIdx = 0;
         for (const auto& bchSubset : std::as_const(newBchSubsets))
         {
             // Ignore single point lines
@@ -1076,9 +1317,7 @@ void PlotterLineChart::onReloadClicked()
             }
             
             // Update points
-            QXYSeries* oldSeries = (QXYSeries*)oldChartSeries[newSeriesIdx];
-            oldSeries->clear();
-            
+            QList<QPointF> points; // in us
             double xFallback = 0.;
             for (int idx : bchSubset.idxs)
             {
@@ -1087,15 +1326,20 @@ void PlotterLineChart::onReloadClicked()
                 double xVal = BenchResults::getParamValue(xName, custDataName, custDataAxis, xFallback);
                 
                 // Add point
-                oldSeries->append(xVal, getYPlotValue(newBchResults.benchmarks[idx], mPlotParams.yType) * mCurrentTimeFactor);
+                double yVal = getYPlotValue(newBchResults.benchmarks[idx], mPlotParams.yType);
+                points.emplaceBack(xVal, yVal);
             }
-            ++newSeriesIdx;
+            seriesPoints.append(points);
         }
+        // Apply
+        mSeriesPoints = seriesPoints;
+        onComboTimeUnitChanged(-1); // force update
     }
     // Reset update if all benchmarks
     else if (mAllIndexes)
     {
         saveConfig();
+        ui->comboBoxBaseline->setCurrentIndex(0); // force reset
         setupChart(newBchResults, mBenchIdxs, mPlotParams, false);
         setupOptions(false);
     }

@@ -19,6 +19,7 @@
 #include "benchmark_results.h"
 #include "result_parser.h"
 
+#include <QHash>
 #include <QFileInfo>
 #include <QDateTime>
 #include <QFileDialog>
@@ -108,6 +109,12 @@ void PlotterBarChart::connectUI()
         connect(ui->comboBoxTimeUnit, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &PlotterBarChart::onComboTimeUnitChanged);
     }
     
+    ui->comboBoxBaseline->addItem("", BaselineType::NONE);
+    ui->comboBoxBaseline->addItem("Divide by X", BaselineType::DIV_BY_X);
+    ui->comboBoxBaseline->addItem("Lowest", BaselineType::LOWEST_Y);
+    ui->comboBoxBaseline->addItem("Highest", BaselineType::HIGHEST_Y);
+    connect(ui->comboBoxBaseline, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &PlotterBarChart::onComboBaselineChanged);
+    
     // Axes
     ui->comboBoxAxis->addItem("X-Axis");
     ui->comboBoxAxis->addItem("Y-Axis");
@@ -149,6 +156,7 @@ void PlotterBarChart::connectUI()
 
 void PlotterBarChart::setupChart(const BenchResults &bchResults, const QVector<int> &bchIdxs, const PlotParams &plotParams, bool init)
 {
+    QVector<SeriesBarSet> seriesBars;
     std::unique_ptr<QChart> scopedChart;
     QChart* chart = nullptr;
     if (init) {
@@ -166,6 +174,7 @@ void PlotterBarChart::setupChart(const BenchResults &bchResults, const QVector<i
         if ( !yAxes.empty() )
             chart->removeAxis( yAxes.constFirst() );
         mSeriesMapping.clear();
+        mSeriesBars.clear();
     }
     Q_ASSERT(chart);
     
@@ -175,6 +184,7 @@ void PlotterBarChart::setupChart(const BenchResults &bchResults, const QVector<i
         if (     bchResults.meta.time_unit == "ns") mCurrentTimeFactor = 1000.;
         else if (bchResults.meta.time_unit == "ms") mCurrentTimeFactor = 0.001;
     }
+    mLastScaleFactor = mCurrentTimeFactor;
     
     // Single series, one barset per benchmark type
     std::unique_ptr<QAbstractBarSeries> scopedSeries;
@@ -209,6 +219,8 @@ void PlotterBarChart::setupChart(const BenchResults &bchResults, const QVector<i
 //        qDebug() << "subsetIdxs:" << bchSubset.idxs;
         
         // X-row
+        SeriesBarSet seriesBarSet;
+        seriesBarSet.name = subsetName.toHtmlEscaped();
         std::unique_ptr<QBarSet> barSet(new QBarSet( subsetName.toHtmlEscaped() ));
         mSeriesMapping.push_back({subsetName, subsetName}); // color set later
         
@@ -220,10 +232,14 @@ void PlotterBarChart::setupChart(const BenchResults &bchResults, const QVector<i
             colLabels.append( xName.toHtmlEscaped() );
             
             // Add column
-            barSet->append(getYPlotValue(bchResults.benchmarks[idx], plotParams.yType) * mCurrentTimeFactor);
+            double val = getYPlotValue(bchResults.benchmarks[idx], plotParams.yType);
+            barSet->append(val * mCurrentTimeFactor);
+            seriesBarSet.labels.emplaceBack(xName);
+            seriesBarSet.values.emplaceBack(val);
         }
         // Add set (i.e. color)
         series->append(barSet.release());
+        seriesBars.append(seriesBarSet);
         
         // Set column labels (only if no collision, empty otherwise)
         if (firstCol) // init
@@ -273,6 +289,9 @@ void PlotterBarChart::setupChart(const BenchResults &bchResults, const QVector<i
         mChartView = new QChartView(scopedChart.release(), this);
         mChartView->setRenderHint(QPainter::Antialiasing);
     }
+    
+    // Update originals copy
+    mSeriesBars = seriesBars;
 }
 
 void PlotterBarChart::setupOptions(bool init)
@@ -309,6 +328,17 @@ void PlotterBarChart::setupOptions(bool init)
     if      (mCurrentTimeFactor > 1.) ui->comboBoxTimeUnit->setCurrentIndex(0); // ns
     else if (mCurrentTimeFactor < 1.) ui->comboBoxTimeUnit->setCurrentIndex(2); // ms
     else                              ui->comboBoxTimeUnit->setCurrentIndex(1); // us
+    
+    // Baseline
+    ui->comboBoxBaseline->setCurrentIndex(0);
+    while (ui->comboBoxBaseline->count() > BaselineBasicTypes) // removed old series
+        ui->comboBoxBaseline->removeItem(ui->comboBoxBaseline->count() - 1);
+    
+    for (int idx = 0 ; idx < mSeriesMapping.size(); ++idx)
+    {
+        auto& config = mSeriesMapping[idx];
+        ui->comboBoxBaseline->addItem(config.oldName, idx);
+    }
     
     // Axes
     Qt::Orientation xOrient = mIsVert ? Qt::Horizontal : Qt::Vertical;
@@ -448,6 +478,19 @@ void PlotterBarChart::loadConfig(bool init)
                 ui->comboBoxTimeUnit->setCurrentText( json["timeUnit"].toString() );
         }
         
+        // Baseline
+        bool appliedBaseline = true;
+        if (json.contains("baseline") && json["baseline"].isDouble())
+        {
+            int type = json["baseline"].toInt(BaselineType::NONE);
+            if (type < 0)
+                ui->comboBoxBaseline->setCurrentIndex(qAbs(type) -1);
+            else if (type < ui->comboBoxBaseline->count() - BaselineBasicTypes)
+                ui->comboBoxBaseline->setCurrentIndex(type + BaselineBasicTypes);
+            else
+                appliedBaseline = false;
+        }
+        
         // Actions
         if (json.contains("autoReload") && json["autoReload"].isBool())
             ui->checkBoxAutoReload->setChecked( json["autoReload"].toBool() );
@@ -474,7 +517,7 @@ void PlotterBarChart::loadConfig(bool init)
                 axis.labelSize = json[prefix + ".labelSize"].toInt(8);
                 ui->spinBoxLabelSize->setValue( axis.labelSize );
             }
-            if (!init)
+            if (!init && (idx == 0 || appliedBaseline)) // x-axis or y-axis with ok baseline
             {
                 if (json.contains(prefix + ".titleText") && json[prefix + ".titleText"].isString()) {
                     axis.titleText = json[prefix + ".titleText"].toString();
@@ -511,7 +554,7 @@ void PlotterBarChart::loadConfig(bool init)
                     ui->spinBoxTicks->setValue( json[prefix + ".ticks"].toInt(5) );
                 if (json.contains(prefix + ".mticks") && json[prefix + ".mticks"].isDouble())
                     ui->spinBoxMTicks->setValue( json[prefix + ".mticks"].toInt(0) );
-                if (!init)
+                if (!init && appliedBaseline)
                 {
                     if (json.contains(prefix + ".min") && json[prefix + ".min"].isDouble())
                         ui->doubleSpinBoxMin->setValue( json[prefix + ".min"].toDouble() );
@@ -558,6 +601,8 @@ void PlotterBarChart::saveConfig()
             json["series"] = series;
         // Time
         json["timeUnit"] = ui->comboBoxTimeUnit->currentText();
+        // Baseline
+        json["baseline"] = ui->comboBoxBaseline->currentData().toInt();
         // Actions
         json["autoReload"] = ui->checkBoxAutoReload->isChecked();
         // Axes
@@ -596,6 +641,232 @@ void PlotterBarChart::saveConfig()
     }
     else
         qWarning() << "Couldn't update: " << QString(config_folder) + config_file;
+}
+
+void PlotterBarChart::updateVAxisTitle()
+{
+    Qt::Orientation yOrient = mIsVert ? Qt::Vertical : Qt::Horizontal;
+    const auto& axes = mChartView->chart()->axes(yOrient);
+    if ( axes.isEmpty() )
+        return;
+    
+    double timeFactor = ui->comboBoxTimeUnit->currentData().toDouble();
+    int baselineIndex = ui->comboBoxBaseline->currentData().toInt();
+    
+    QString timeUnit;
+    if (ui->comboBoxTimeUnit->count() > 0)
+    {
+        timeUnit = " (us)";
+        if      (timeFactor > 1.) timeUnit = " (ns)";
+        else if (timeFactor < 1.) timeUnit = " (ms)";
+    }
+    
+    QString baselineSuffix;
+    if (baselineIndex == BaselineType::DIV_BY_X) {
+        baselineSuffix = " per element";
+    }
+    else if (baselineIndex == BaselineType::LOWEST_Y) {
+        baselineSuffix = " (relative to lowest)";
+        timeUnit.clear();
+    }
+    else if (baselineIndex == BaselineType::HIGHEST_Y) {
+        baselineSuffix = " (relative to highest)";
+        timeUnit.clear();
+    }
+    else if (baselineIndex >= 0) { // div by series Y
+        baselineSuffix = " (relative to series " + QString::number(baselineIndex + 1) + ")";
+        timeUnit.clear();
+    }
+    
+    // Remove old suffixes
+    QAbstractAxis* axis = axes.first();
+    QString axisTitle = axis->titleText();
+    if (axisTitle.endsWith("(us)") || axisTitle.endsWith("(ns)") || axisTitle.endsWith("(ms)")) {
+        axisTitle.chop(4);
+    }
+    else
+    {
+        qsizetype idx = axisTitle.lastIndexOf("(relative to ", Qt::CaseInsensitive);
+        if (idx >= 0)
+            axisTitle.truncate(idx);
+    }
+    
+    if (axisTitle.endsWith("per element ", Qt::CaseInsensitive))
+        axisTitle.chop(12);
+    
+    if (axisTitle.endsWith(" "))
+        axisTitle.chop(1);
+    
+    // Apply
+    axisTitle += baselineSuffix + timeUnit;
+    onEditTitleChanged2(axisTitle, 1);
+}
+
+void PlotterBarChart::updateVAxisRange(double scaleFactor)
+{
+    double updateFactor = scaleFactor / mLastScaleFactor;
+    Qt::Orientation yOrient = mIsVert ? Qt::Vertical : Qt::Horizontal;
+    const auto& axes = mChartView->chart()->axes(yOrient);
+    
+    ui->doubleSpinBoxMin->setValue(ui->doubleSpinBoxMin->value() * updateFactor);
+    ui->doubleSpinBoxMax->setValue(ui->doubleSpinBoxMax->value() * updateFactor);
+    
+    if (ui->comboBoxAxis->currentIndex() != 1 && !axes.isEmpty()) // force apply
+    {
+        QValueAxis* yAxis = (QValueAxis*)(axes.first());
+        onSpinMinChanged2(yAxis->min() * updateFactor, 1);
+        onSpinMaxChanged2(yAxis->max() * updateFactor, 1);
+    }
+    mLastScaleFactor = scaleFactor;
+}
+
+double PlotterBarChart::updateChartPoints()
+{
+    double scaleFactor = EPSILON_DIV;
+    int baselineIndex = ui->comboBoxBaseline->currentData().toInt();
+    double timeFactor = ui->comboBoxTimeUnit->currentData().toDouble();
+    
+    auto chartSeries = mChartView->chart()->series();
+    if (chartSeries.size() != 1)
+        return 1.;
+    
+    const QAbstractBarSeries* barSeries = (QAbstractBarSeries*)chartSeries[0];
+    auto barSets = barSeries->barSets();
+    
+    Q_ASSERT(mSeriesBars.size() == barSets.size());
+    Q_ASSERT(baselineIndex < mSeriesBars.size());
+    
+    switch (baselineIndex)
+    {
+        case BaselineType::NONE:
+        {
+            for (qsizetype i = 0; i < barSets.size(); ++i)
+            {
+                QBarSet* barSet = barSets[i];
+                barSet->remove(0, barSet->count());
+                SeriesBarSet seriesSet = mSeriesBars[i];
+                
+                for (auto newValue : seriesSet.values)
+                    barSet->append(newValue * timeFactor);
+            }
+            scaleFactor = timeFactor;
+            break;
+        }
+        case BaselineType::DIV_BY_X:
+        {
+            for (qsizetype i = 0; i < barSets.size(); ++i)
+            {
+                QBarSet* barSet = barSets[i];
+                barSet->remove(0, barSet->count());
+                SeriesBarSet seriesSet = mSeriesBars[i];
+
+                for (qsizetype i = 0; i < seriesSet.values.size(); ++i) {
+                    bool ok = false;
+                    double xVal = seriesSet.labels[i].toDouble(&ok);
+                    if (ok && xVal != 0.) {
+                        double xFactor = xVal;
+                        scaleFactor = qAbs(scaleFactor) < qAbs(xFactor) ? xFactor : scaleFactor;
+                        
+                        barSet->append(seriesSet.values[i] * timeFactor / xFactor);
+                    }
+                    else {
+                        barSet->append(0.);
+                    }
+                }
+            }
+            scaleFactor = timeFactor / scaleFactor;
+            break;
+        }
+        case BaselineType::LOWEST_Y:
+        {
+            QHash<QString, double> rFactors; // name, factor
+            for (qsizetype i = 0; i < mSeriesBars.size(); ++i)
+            {
+                const SeriesBarSet& seriesSet = mSeriesBars[i];
+                for (qsizetype j = 0; j < seriesSet.values.size(); ++j) {
+                    double value = seriesSet.values[j];
+                    auto it = rFactors.find(seriesSet.labels[j]);
+                    double yVal = (it != rFactors.end()) ? qMin(it.value(), value) : value;
+                    rFactors[seriesSet.labels[j]] = yVal != 0. ? yVal : EPSILON_DIV;
+                }
+            }
+            for (qsizetype i = 0; i < barSets.size(); ++i)
+            {
+                QBarSet* barSet = barSets[i];
+                barSet->remove(0, barSet->count());
+                const SeriesBarSet& seriesSet = mSeriesBars[i];
+                
+                for (qsizetype j = 0; j < seriesSet.values.size(); ++j) {
+                    double value = seriesSet.values[j];
+                    auto it = rFactors.find(seriesSet.labels[j]);
+                    double rFactor = (it != rFactors.end()) ? it.value() : 1.;
+                    scaleFactor = qAbs(scaleFactor) < qAbs(rFactor) ? rFactor : scaleFactor;
+                    
+                    barSet->append(value / rFactor);
+                }
+            }
+            scaleFactor = 1. / scaleFactor;
+            break;
+        }
+        case BaselineType::HIGHEST_Y:
+        {
+            QHash<QString, double> rFactors; // name, factor
+            for (qsizetype i = 0; i < mSeriesBars.size(); ++i)
+            {
+                const SeriesBarSet& seriesSet = mSeriesBars[i];
+                for (qsizetype j = 0; j < seriesSet.values.size(); ++j) {
+                    double value = seriesSet.values[j];
+                    auto it = rFactors.find(seriesSet.labels[j]);
+                    double yVal = (it != rFactors.end()) ? qMax(it.value(), value) : value;
+                    rFactors[seriesSet.labels[j]] = yVal != 0. ? yVal : EPSILON_DIV;
+                }
+            }
+            for (qsizetype i = 0; i < barSets.size(); ++i)
+            {
+                QBarSet* barSet = barSets[i];
+                barSet->remove(0, barSet->count());
+                const SeriesBarSet& seriesSet = mSeriesBars[i];
+                
+                for (qsizetype j = 0; j < seriesSet.values.size(); ++j) {
+                    double value = seriesSet.values[j];
+                    auto it = rFactors.find(seriesSet.labels[j]);
+                    double rFactor = (it != rFactors.end()) ? it.value() : 1.;
+                    scaleFactor = qAbs(scaleFactor) < qAbs(rFactor) ? rFactor : scaleFactor;
+                    
+                    barSet->append(value / rFactor);
+                }
+            }
+            scaleFactor = 1. / scaleFactor;
+            break;
+        }
+        default: // divide by series Y
+        {
+            Q_ASSERT(baselineIndex >= 0 && baselineIndex < (int)mSeriesBars.size());
+            QHash<QString, double> rFactors; // name, factor
+            const auto& seriesSet = mSeriesBars[baselineIndex];
+            for (qsizetype i = 0; i < seriesSet.values.size(); ++i) {
+                rFactors[seriesSet.labels[i]] = seriesSet.values[i] != 0. ? seriesSet.values[i] : EPSILON_DIV;
+            }
+            for (qsizetype i = 0; i < barSets.size(); ++i)
+            {
+                QBarSet* barSet = barSets[i];
+                barSet->remove(0, barSet->count());
+                const SeriesBarSet& seriesSet = mSeriesBars[i];
+                
+                for (qsizetype j = 0; j < seriesSet.values.size(); ++j) {
+                    double value = seriesSet.values[j];
+                    auto it = rFactors.find(seriesSet.labels[j]);
+                    double rFactor = (it != rFactors.end()) ? it.value() : 1.;
+                    scaleFactor = qAbs(scaleFactor) < qAbs(rFactor) ? rFactor : scaleFactor;
+                    
+                    barSet->append(value / rFactor);
+                }
+            }
+            scaleFactor = 1. / scaleFactor;
+            break;
+        }
+    }
+    return scaleFactor;
 }
 
 //
@@ -684,50 +955,27 @@ void PlotterBarChart::onComboTimeUnitChanged(int /*index*/)
 {
     if (mIgnoreEvents) return;
     
-    // Update data
-    double unitFactor = ui->comboBoxTimeUnit->currentData().toDouble();
-    double updateFactor = unitFactor / mCurrentTimeFactor;  // can cause precision loss
-    auto chartSeries = mChartView->chart()->series();
-    if (chartSeries.empty())
-        return;
+    double timeFactor = ui->comboBoxTimeUnit->currentData().toDouble();
+    double scaleFactor = updateChartPoints();
     
-    const QAbstractBarSeries* barSeries = (QAbstractBarSeries*)chartSeries[0];
-    auto barSets = barSeries->barSets();
-    for (int idx = 0; idx < barSets.size(); ++idx)
-    {
-        auto* barSet = barSets.at(idx);
-        for (int i = 0; i < barSet->count(); ++i) {
-            qreal val = barSet->at(i);
-            barSet->replace(i, val * updateFactor);
-        }
-    }
+    updateVAxisTitle();
+    updateVAxisRange(scaleFactor);
     
-    // Update axis title
-    QString oldUnitName = "(us)";
-    if      (mCurrentTimeFactor > 1.) oldUnitName = "(ns)";
-    else if (mCurrentTimeFactor < 1.) oldUnitName = "(ms)";
+    mCurrentTimeFactor = timeFactor;
+}
+
+void PlotterBarChart::onComboBaselineChanged(int /*index*/)
+{
+    if (mIgnoreEvents) return;
     
-    Qt::Orientation yOrient = mIsVert ? Qt::Vertical : Qt::Horizontal;
-    const auto& axes = mChartView->chart()->axes(yOrient);
-    if ( !axes.isEmpty() ) {
-        QAbstractAxis* axis = axes.first();
-        QString axisTitle = axis->titleText();
-        if (axisTitle.endsWith(oldUnitName)) {
-            QString unitName  = ui->comboBoxTimeUnit->currentText();
-            onEditTitleChanged2(axisTitle.replace(axisTitle.size() - 3, 2, unitName), 1);
-        }
-    }
-    // Update range
-    ui->doubleSpinBoxMin->setValue(ui->doubleSpinBoxMin->value() * updateFactor);
-    ui->doubleSpinBoxMax->setValue(ui->doubleSpinBoxMax->value() * updateFactor);
-    if (ui->comboBoxAxis->currentIndex() != 1 && !axes.isEmpty())
-    {
-        QValueAxis* yAxis = (QValueAxis*)(axes.first());
-        onSpinMinChanged2(yAxis->min() * updateFactor, 1);
-        onSpinMaxChanged2(yAxis->max() * updateFactor, 1);
-    }
+    int baselineIndex = ui->comboBoxBaseline->currentData().toInt();
+    bool useTimeUnit = baselineIndex == BaselineType::NONE || baselineIndex == BaselineType::DIV_BY_X;
+    ui->comboBoxTimeUnit->setEnabled(useTimeUnit);
     
-    mCurrentTimeFactor = unitFactor;
+    double scaleFactor = updateChartPoints();
+    
+    updateVAxisTitle();
+    updateVAxisRange(scaleFactor);
 }
 
 //
@@ -1137,7 +1385,6 @@ void PlotterBarChart::onReloadClicked()
         QMessageBox::critical(this, "Chart reload", "Error parsing original file: " + mOrigFilename + " -> " + errorMsg);
         return;
     }
-    
     for (const auto& addFile : std::as_const(mAddFilenames))
     {
         errorMsg.clear();
@@ -1161,7 +1408,7 @@ void PlotterBarChart::onReloadClicked()
         if (mAllIndexes)
         {
             mBenchIdxs.clear();
-            for (int i=0; i<newBchResults.benchmarks.size(); ++i)
+            for (int i = 0; i < newBchResults.benchmarks.size(); ++i)
                 mBenchIdxs.append(i);
         }
     }
@@ -1201,16 +1448,16 @@ void PlotterBarChart::onReloadClicked()
             }
             ++newBarSetIdx;
         }
-        if (newBarSetIdx != oldBarSeries->count()) {
+        if (newBarSetIdx != oldBarSeries->count())
             errorMsg = "Number of series is different";
-        }
     }
     
     // Direct update if compatible
-    if ( errorMsg.isEmpty() )
+    if (errorMsg.isEmpty())
     {
         newBarSetIdx = 0;
         const QAbstractBarSeries* oldBarSeries = (QAbstractBarSeries*)oldChartSeries[0];
+        Q_ASSERT(mSeriesBars.size() == oldBarSeries->barSets().size());
         for (const auto& bchSubset : std::as_const(newBchSubsets))
         {
             // Ignore empty set
@@ -1220,20 +1467,25 @@ void PlotterBarChart::onReloadClicked()
             }
             
             // Update points
-            const auto& barSet = oldBarSeries->barSets().at(newBarSetIdx);
-            barSet->remove(0, barSet->count());
+            auto& barSet = mSeriesBars[newBarSetIdx];
+            Q_ASSERT(bchSubset.idxs.size() == barSet.values.size());
             
+            int j = 0;
             for (int idx : bchSubset.idxs) {
-                // Add column
-                barSet->append(getYPlotValue(newBchResults.benchmarks[idx], mPlotParams.yType) * mCurrentTimeFactor);
+                double yVal = getYPlotValue(newBchResults.benchmarks[idx], mPlotParams.yType);
+                barSet.values[j] = yVal;
+                ++j;
             }
             ++newBarSetIdx;
         }
+        // Apply
+        onComboTimeUnitChanged(-1); // force update
     }
     // Reset update if all benchmarks
     else if (mAllIndexes)
     {
         saveConfig();
+        ui->comboBoxBaseline->setCurrentIndex(0); // force reset
         setupChart(newBchResults, mBenchIdxs, mPlotParams, false);
         setupOptions(false);
     }

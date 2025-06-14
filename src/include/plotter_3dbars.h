@@ -80,7 +80,6 @@ public slots:
     void onReloadClicked();
     void onSnapshotClicked();
     
-    
 private:
     struct AxisParam {
         AxisParam() : rotate(false), title(false), minIdx(0), maxIdx(0) {}

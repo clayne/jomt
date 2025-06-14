@@ -48,7 +48,11 @@ private:
     void setupOptions(bool init = true);
     void loadConfig(bool init);
     void saveConfig();
-
+    
+    void updateVAxisTitle();
+    void updateVAxisRange(double scaleFactor);
+    double updateChartPoints();
+    
 public slots:
     void onComboThemeChanged(int index);
     
@@ -57,6 +61,7 @@ public slots:
     void onSpinLegendFontSizeChanged(int i);
     void onSeriesEditClicked();
     void onComboTimeUnitChanged(int index);
+    void onComboBaselineChanged(int index);
     
     void onComboAxisChanged(int index);
     void onCheckAxisVisible(int state);
@@ -86,7 +91,6 @@ public slots:
     void onReloadClicked();
     void onSnapshotClicked();
     
-    
 private:
     struct AxisParam {
         AxisParam() : visible(true), title(true) {}
@@ -94,6 +98,11 @@ private:
         bool visible, title;
         QString titleText;
         int titleSize, labelSize;
+    };
+    struct SeriesBarSet {
+        QString name;
+        QStringList labels;
+        QList<double> values;
     };
     
     Ui::PlotterBarChart *ui;
@@ -107,7 +116,9 @@ private:
     
     QFileSystemWatcher mWatcher;
     SeriesMapping mSeriesMapping;
-    double mCurrentTimeFactor;      // from us
+    double mCurrentTimeFactor; // from us
+    QVector<SeriesBarSet> mSeriesBars; // originals copy, in us
+    double mLastScaleFactor = 1.; // from no baseline/us time
     AxisParam mAxesParams[2];
     const bool mIsVert;
     bool mIgnoreEvents = false;

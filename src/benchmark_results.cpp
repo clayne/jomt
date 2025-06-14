@@ -129,7 +129,8 @@ QPair<double, QString> BenchResults::convertCustomDataSize(const QString &tplt)
 
 /**************************************************************************************************/
 
-double BenchResults::getParamValue(const QString &name, QString &custDataName, bool &custDataAxis, double &fallbackIdx)
+double BenchResults::getParamValue(const QString &name, QString &custDataName,
+                                   bool &custDataAxis, double &fallbackIdx)
 {
     bool ok = false;
     double val = name.toDouble(&ok);

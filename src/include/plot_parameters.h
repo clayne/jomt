@@ -22,6 +22,8 @@
 #include <QVector>
 #include <QStringList>
 
+#define EPSILON_DIV (0.00001)
+
 extern const char* config_folder;
 
 
@@ -51,6 +53,16 @@ enum PlotValueType {
     BytesType, BytesMinType, BytesMeanType, BytesMedianType, BytesStddevType, BytesCvType,
     ItemsType, ItemsMinType, ItemsMeanType, ItemsMedianType, ItemsStddevType, ItemsCvType
 };
+
+// Baseline basic types
+enum BaselineType {
+  NONE      = -1,
+  DIV_BY_X  = -2,
+  LOWEST_Y  = -3,
+  HIGHEST_Y = -4
+  // >= 0 is series index
+};
+static const int BaselineBasicTypes = 4;
 
 // Y-value stats
 struct BenchYStats {

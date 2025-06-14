@@ -7,7 +7,7 @@
     <x>0</x>
     <y>0</y>
     <width>1080</width>
-    <height>682</height>
+    <height>700</height>
    </rect>
   </property>
   <property name="windowTitle">
@@ -105,6 +105,20 @@
              </item>
              <item>
               <widget class="QComboBox" name="comboBoxTimeUnit"/>
+             </item>
+            </layout>
+           </item>
+           <item>
+            <layout class="QHBoxLayout" name="horizontalLayout_14">
+             <item>
+              <widget class="QLabel" name="label_4">
+               <property name="text">
+                <string>Baseline:</string>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QComboBox" name="comboBoxBaseline"/>
              </item>
             </layout>
            </item>

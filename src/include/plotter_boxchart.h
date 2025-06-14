@@ -84,7 +84,6 @@ public slots:
     void onReloadClicked();
     void onSnapshotClicked();
     
-    
 private:
     struct AxisParam {
         AxisParam() : visible(true), title(true) {}

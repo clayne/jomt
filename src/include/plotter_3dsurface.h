@@ -76,8 +76,7 @@ public slots:
     void onAutoReload(const QString &path);
     void onReloadClicked();
     void onSnapshotClicked();
-
-
+    
 private:
     struct ValAxisParam {
         ValAxisParam() : rotate(false), title(false), log(false), logBase(10) {}
